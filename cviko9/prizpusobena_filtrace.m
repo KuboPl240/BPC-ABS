@@ -1,0 +1,80 @@
+% -------------------------------------------------------------------------
+% BPC-ABS cvičení -09-          2022-04-03                  Martin Vítek 
+% Detekce grafoelementů v EEG                               Marina Ronzhina 
+% -------------------------------------------------------------------------
+% Tento skript slouží pro detekci K-komplexů v EEG
+% -------------------------------------------------------------------------
+
+clear all
+close all
+clc
+
+%% Nacteni dostupnych dat
+
+load eeg_Kkomplexy.mat  % nahrajeme EEG signal, ktery obsahuje K-komplexy
+fvz = 200;              % vzorkovaci frekvence
+
+positions1 = load('Visual_scoring1.txt','-ascii'); % nahrani vysledku vizualni detekce lidskymi experty (1. sloupec - pozice zacatku K-komplexu, 2. sloupec - delka trvani K-komplexu, vse v sekundach)
+positions2 = load('Visual_scoring2.txt','-ascii');
+
+figure, plotExpertPositions(x, positions1, positions2, fvz, 'Puvodni EEG', 'pozice K-komplexu dle vizualni analyzy dvou expertu')% zobrazeni EEG a pozic K-komplexu dle expertni analyzy
+
+%% Prizpusobena filtrace EEG
+vzorky = fix(((length(x)/fvz-1/fvz)/2)-1);
+vzor = [0 (ones(1,80)*-150) (ones(1,80)*150) 0]; % Vytvor sablonu (radkovy vektor) shodnou s hledanymi K-komplexy
+
+h = fliplr(vzor); % Vytvor implulzni charakteristiku prizpusobeneho filtru prevracenim sablony v case
+
+figure % Vykresleni sablony K-komplexu a odpovidajici imp. charakteristiky prizpusobeneho filtru
+subplot(121), plot(vzor, 'b'), xlabel('Vzorky, -'),title('Sablona K-komplexu'), grid on 
+subplot(122), plot(h,'r'), xlabel('Vzorky, -'),title('Imp. charakteristika filtru'), grid on
+
+xFilt = filtfilt(h,1,x); % Proved filtraci EEG s vyuzitim navrzene impulzni charakteristiky 'h'(prizpusobena filtrace)
+
+%% Dodatecne zpracovani EEG po prizpusobene filtraci (zvyrazneni spicek, pravdepodobne korespondujicich s K-komplexy)
+
+xFilt = xFilt.^2; %Proved umocneni vystupu pro zvyrazneni spicek
+
+hdp = fir1(100,0.5/(fvz/2), "low");
+xProDetekci = filtfilt(hdp,1,xFilt);
+ % Proved vyhlazeni umocneneho signalu FIR filtrem typu dolni propust (nastav charakteristiky filtru vhodnym zpusobem!)
+
+t = 0:1/fvz:length(x)/fvz-1/fvz;    % Vektor pro spravne zobrazeni casove osy v sekundach
+figure                              % Vykresleni vysledku zpracovani EEG
+subplot(3,1,1), plot( t, x ), title('Puvodni EEG'), xlabel('Cas, s'), ylabel('U, \muV')
+subplot(3,1,2), plot( t, xFilt ), title('EEG po filtraci prizpusobenym filtrem'), xlabel('Cas, s'), ylabel('U, \muV')
+subplot(3,1,3), plotExpertPositions(xProDetekci, positions1, positions2, fvz, 'Umocneny a vyfiltrovany vysledek prizpusobene filtrace', 'pozice K-komplexu dle vizualni analyzy dvou expertu')
+
+%% Detekce spicek ve zpracovanem signalu (tj. detekce K-komplexu)
+
+N = length( xProDetekci );  % Delka signalu
+delkaOkna = 1000;           % Nastaveni delky okna, ve kterem budeme vyhledavat spicky korespondujici s K-komplexy 
+prahDetekce = 4E19;         % Nastaveni prahu pro detekci K-komplexu
+index = 1;                  % Priprava indexu pro cyklus WHILE
+polohyK = [];               % Sem budeme ukladat polohy detekovanych K-komplexu
+
+%  Prohledavame signal a hledame hodnotu nad prahem (hledame maximalni odezvy v signalu, ktere koresponduji s K-komplexy)
+while index < N-delkaOkna
+
+    if xProDetekci(index) > prahDetekce % Jestlize najdes hodnotu nad prahem (pravdepodobna pritomnost K-komplexu), pak najdi maximum v aktualnim useku
+    
+        usek = floor(length(xProDetekci)/delkaOkna);  % Vyber aktualni usek delky 'delkaOkna'   
+        [hodnota,poloha] = max(xProDetekci(index:index+usek));
+        polohyK = [polohyK index+poloha];  % Detekuj maximum v useku a uloz SPRAVNOU polohu maxima (nezapomen, ze nas zajima pozice K-komplexu v ramci celeho signalu, nikoliv v ramci useku!)
+        index = index + usek;  % Obnov index s cilem se posunout na zacatek dalsiho useku (coz je misto, od ktereho budes hledat zbyle K-komplexy)
+        prahDetekce = 0.4*xProDetekci(polohyK(end));       
+    else % Pokud nenajdes hodnotu nad prahem, pak se posun v signale o 1 vzorek (at muzes hledat dal) 
+
+        index = index + 1; 
+        
+    end
+    
+end
+
+% Vykresleni vysledku detekce
+figure, plotExpertPositions(x, positions1, positions2, fvz, 'Puvodni EEG', 'pozice K-komplexu dle vizualni (modra a zelena) i automaticke (cervena) analyzy')
+hold on
+stem( polohyK./fvz, 1.1*max(x)*ones(1,length(polohyK)), 'r' ) % Pozn.: polohy jsou vyjadreny v sekundach (pro spravne zobrazeni)
+hold off
+
+
